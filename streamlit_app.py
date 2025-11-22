@@ -55,7 +55,13 @@ if not st.session_state.authenticated:
     password = st.text_input("Password", type="password", key="password_input")
     
     if st.button("Sign In"):
-        if password == "slunicko":
+        # Use secrets in production, fallback to hardcoded password for local testing
+        try:
+            correct_password = st.secrets["PASSWORD"]
+        except (KeyError , FileNotFoundError):
+            print(":(")
+        
+        if password == correct_password:
             st.session_state.authenticated = True
             st.rerun()
         else:
@@ -96,7 +102,7 @@ with col2:
     num_headlines = st.slider(
         "Number of generated headlines",
         min_value=1,
-        max_value=5,
+        max_value=10,
         value=3,
         help="How many headline variants to generate"
     )
