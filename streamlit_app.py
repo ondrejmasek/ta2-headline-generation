@@ -3,6 +3,9 @@ from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import torch
 import os
 
+# Global device configuration
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 @st.cache_resource
 def load_model():
@@ -15,13 +18,14 @@ def load_model():
 
     tokenizer = AutoTokenizer.from_pretrained(
         repo_id,
-        use_auth_token=hf_token
+        token=hf_token,
     )
     model = AutoModelForSeq2SeqLM.from_pretrained(
         repo_id,
-        use_auth_token=hf_token
+        token=hf_token,
     )
 
+    model.to(device)
     model.eval()
     return tokenizer, model
 
@@ -33,20 +37,22 @@ st.set_page_config(
 )
 
 # ============================================================================
-# PLACEHOLDER MODEL FUNCTION
-# TODO: Replace this with a real fine-tuned model (e.g., T5 from Hugging Face)
+# HEADLINE GENERATION FUNCTION
 # ============================================================================
 def generate_headlines(text, num_headlines, min_words, max_words):
     tokenizer, model = load_model()
 
-    if not text.strip():
+    text = text.strip()
+    if not text:
         return [""] * num_headlines
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.to(device)
+    # basic range sanity
+    min_words = max(3, int(min_words))
+    max_words = max(min_words + 1, int(max_words))
 
-    min_tokens = max(min_words, 3)
-    max_new_tokens = max(max_words + 4, min_tokens + 2)
+    # rough mapping words -> tokens (Czech words are often 1–2 tokens)
+    approx_min_tokens = int(min_words * 1.2)
+    approx_max_new_tokens = int(max_words * 1.6)
 
     inputs = tokenizer(
         text,
@@ -55,27 +61,47 @@ def generate_headlines(text, num_headlines, min_words, max_words):
         return_tensors="pt"
     ).to(device)
 
-    num_beams = max(4, num_headlines)
+    # Decoding strategy:
+    # - 1 headline  -> deterministic beam search for best quality
+    # - >1 headline -> sampling for diversity
+    if num_headlines == 1:
+        do_sample = False
+        num_beams = 4
+        num_return_sequences = 1
+        top_k = None
+        top_p = None
+        temperature = None
+    else:
+        do_sample = True
+        num_beams = 1
+        num_return_sequences = num_headlines
+        top_k = 50
+        top_p = 0.95
+        temperature = 0.9
 
     with torch.no_grad():
-        out = model.generate(
+        output_ids = model.generate(
             **inputs,
+            do_sample=do_sample,
             num_beams=num_beams,
-            num_return_sequences=num_headlines,
-            min_length=min_tokens,
-            max_new_tokens=max_new_tokens,
+            num_return_sequences=num_return_sequences,
+            min_length=approx_min_tokens,
+            max_new_tokens=approx_max_new_tokens,
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
             no_repeat_ngram_size=3,
-            early_stopping=True
+            repetition_penalty=1.1,
+            early_stopping=True,
         )
 
-    decoded = tokenizer.batch_decode(out, skip_special_tokens=True)
+    decoded = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
 
+    # Don't hard-cut by max_words – we just normalize whitespace
     cleaned = []
     for h in decoded:
-        words = h.strip().split()
-        if len(words) > max_words:
-            words = words[:max_words]
-        cleaned.append(" ".join(words))
+        h = " ".join(h.split())  # collapse extra spaces/newlines
+        cleaned.append(h)
 
     return cleaned
 
@@ -149,7 +175,7 @@ with col2:
     
     # Minimum word count
     min_words = st.number_input(
-        "Minimum headline word count",
+        "Minimum headline word count (approx.)",
         min_value=3,
         max_value=20,
         value=5,
@@ -158,7 +184,7 @@ with col2:
     
     # Maximum word count
     max_words = st.number_input(
-        "Maximum headline word count",
+        "Maximum headline word count (approx.)",
         min_value=5,
         max_value=30,
         value=12,
@@ -186,15 +212,35 @@ if generate_button:
     elif max_words < min_words:
         st.error("❌ Maximum word count must be greater than or equal to minimum word count!")
     else:
-        # Show loading state
-        with st.spinner("🔄 Generating headlines..."):
-            # Call the placeholder model function
-            headlines = generate_headlines(
-                text=article_text,
-                num_headlines=num_headlines,
-                min_words=min_words,
-                max_words=max_words
-            )
+        # Show loading state with progress bar
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        status_text.text("🔄 Loading model...")
+        progress_bar.progress(25)
+        
+        status_text.text("🔄 Processing article text...")
+        progress_bar.progress(50)
+        
+        status_text.text("🔄 Generating headlines...")
+        progress_bar.progress(75)
+        
+        # Call the model function
+        headlines = generate_headlines(
+            text=article_text,
+            num_headlines=num_headlines,
+            min_words=min_words,
+            max_words=max_words
+        )
+        
+        progress_bar.progress(100)
+        status_text.text("✅ Generation complete!")
+        
+        # Clear progress indicators after a brief moment
+        import time
+        time.sleep(0.5)
+        progress_bar.empty()
+        status_text.empty()
         
         # Display results
         st.success("✅ Headlines generated successfully!")
@@ -216,7 +262,3 @@ if generate_button:
                     {headline}
                 </div>
                 """, unsafe_allow_html=True)
-
-# Footer
-st.write("---")
-st.caption("💡 Tip: This application currently uses a placeholder model. The real Czech headline generation model will be integrated later.")
