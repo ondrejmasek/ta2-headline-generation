@@ -51,8 +51,9 @@ def generate_headlines(text, num_headlines, min_words, max_words):
     max_words = max(min_words + 1, int(max_words))
 
     # rough mapping words -> tokens (Czech words are often 1–2 tokens)
-    approx_min_tokens = int(min_words * 1.2)
-    approx_max_new_tokens = int(max_words * 1.6)
+    # Add buffer to ensure complete sentences
+    approx_min_tokens = int(min_words * 1.0)
+    approx_max_new_tokens = int(max_words * 2.5)  # Increased buffer for complete headlines
 
     inputs = tokenizer(
         text,
@@ -92,15 +93,22 @@ def generate_headlines(text, num_headlines, min_words, max_words):
             temperature=temperature,
             no_repeat_ngram_size=3,
             repetition_penalty=1.1,
-            early_stopping=True,
+            early_stopping=False,  # Changed to False to avoid premature cutoff
+            eos_token_id=tokenizer.eos_token_id,  # Ensure proper sentence ending
         )
 
     decoded = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
 
-    # Don't hard-cut by max_words – we just normalize whitespace
+    # Clean up and ensure we don't have incomplete words
     cleaned = []
     for h in decoded:
-        h = " ".join(h.split())  # collapse extra spaces/newlines
+        h = " ".join(h.split()).strip()  # collapse extra spaces/newlines
+        
+        # Optional: truncate to max_words if significantly over, but preserve complete words
+        words = h.split()
+        if len(words) > max_words + 3:  # Only truncate if significantly over limit
+            h = " ".join(words[:max_words+2])  # Adjusted to +2 to better fit max_words
+        
         cleaned.append(h)
 
     return cleaned
