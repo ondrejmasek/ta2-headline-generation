@@ -1,5 +1,29 @@
 import streamlit as st
-import time
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+import torch
+import os
+
+
+@st.cache_resource
+def load_model():
+    """
+    Load the private HF model using the token stored in Streamlit secrets.
+    Cached so the model loads only once.
+    """
+    hf_token = st.secrets["HF_TOKEN"]
+    repo_id = st.secrets["HF_REPO_ID"]
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        repo_id,
+        use_auth_token=hf_token
+    )
+    model = AutoModelForSeq2SeqLM.from_pretrained(
+        repo_id,
+        use_auth_token=hf_token
+    )
+
+    model.eval()
+    return tokenizer, model
 
 # Page configuration
 st.set_page_config(
@@ -12,32 +36,48 @@ st.set_page_config(
 # PLACEHOLDER MODEL FUNCTION
 # TODO: Replace this with a real fine-tuned model (e.g., T5 from Hugging Face)
 # ============================================================================
-def generate_headlines(text: str, num_headlines: int, min_words: int, max_words: int) -> list[str]:
-    """
-    Placeholder function for headline generation.
-    
-    In the future, this will be replaced with a real Czech headline generation model.
-    For example, a fine-tuned T5 or BART model from Hugging Face.
-    
-    Args:
-        text: The article text to generate headlines for
-        num_headlines: Number of headlines to generate
-        min_words: Minimum number of words in each headline
-        max_words: Maximum number of words in each headline
-    
-    Returns:
-        List of generated headlines
-    """
-    # Simulate model processing time
-    time.sleep(5)
-    
-    # Return dummy headlines for demo purposes
-    headlines = []
-    for i in range(num_headlines):
-        word_count = min_words + (i % (max_words - min_words + 1))
-        headlines.append(f"Demo Czech headline number {i+1} ({word_count} words)")
-    
-    return headlines
+def generate_headlines(text, num_headlines, min_words, max_words):
+    tokenizer, model = load_model()
+
+    if not text.strip():
+        return [""] * num_headlines
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
+
+    min_tokens = max(min_words, 3)
+    max_new_tokens = max(max_words + 4, min_tokens + 2)
+
+    inputs = tokenizer(
+        text,
+        truncation=True,
+        max_length=512,
+        return_tensors="pt"
+    ).to(device)
+
+    num_beams = max(4, num_headlines)
+
+    with torch.no_grad():
+        out = model.generate(
+            **inputs,
+            num_beams=num_beams,
+            num_return_sequences=num_headlines,
+            min_length=min_tokens,
+            max_new_tokens=max_new_tokens,
+            no_repeat_ngram_size=3,
+            early_stopping=True
+        )
+
+    decoded = tokenizer.batch_decode(out, skip_special_tokens=True)
+
+    cleaned = []
+    for h in decoded:
+        words = h.strip().split()
+        if len(words) > max_words:
+            words = words[:max_words]
+        cleaned.append(" ".join(words))
+
+    return cleaned
 
 
 # ============================================================================
